@@ -140,10 +140,10 @@
       const meta = document.querySelector('meta[name="rail-api-base"]');
       const fromMeta = meta && meta.getAttribute('content') || '';
       window.RAIL_API_BASE =
-        (location.origin && String(location.origin)) ||
         (fromMeta && fromMeta.trim()) ||
         (window.RAIL_API_BASE && String(window.RAIL_API_BASE)) ||
-        'http://localhost:8080';
+        (location.origin && String(location.origin)) ||
+        'https://aver-production.up.railway.app/';
     })();
 
     const STATION_ID = 'IALFAR32';
@@ -240,7 +240,7 @@
       const endDay = String(endDateObj.getDate()).padStart(2, '0');
       const endDate = `${year}${month}${endDay}`;
 
-      const url = `/api/weather/history?stationId=${encodeURIComponent(stationId)}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`;
+      const url = `${window.RAIL_API_BASE}/api/weather/history?stationId=${encodeURIComponent(stationId)}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`;
 
       spinner.style.display = "block";
       resultado.textContent = "🔄 Consultando.";
@@ -329,7 +329,7 @@
     const rangoEl = document.getElementById('total-lluvia-rango');
     if (!el) return;
     try {
-      const r = await fetch(`/api/lluvia/total/year`, { credentials: 'include', cache: 'no-store' });
+      const r = await fetch(`${window.RAIL_API_BASE}/api/lluvia/total/year`, { credentials: 'include', cache: 'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const data = await r.json();
       const mm = Number(data?.total_mm ?? 0);
@@ -350,6 +350,37 @@
 
 </body>
 </html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
