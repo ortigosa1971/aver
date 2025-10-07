@@ -139,6 +139,12 @@ app.get('/inicio', requiereSesionUnica, async (req, res) => {
   res.send(`<h1>Inicio</h1><p>Usuario: ${req.session.usuario}</p>`);
 });
 
+/* ===================== Verificar sesión (usado por el front) ===================== */
+app.get('/verificar-sesion', (req, res) => {
+  if (req.session?.usuario) return res.json({ ok: true, usuario: req.session.usuario });
+  res.status(401).json({ ok: false });
+});
+
 /* ===================== Logout ===================== */
 app.post('/logout', (req, res) => {
   const u = req.session?.usuario;
@@ -211,7 +217,8 @@ app.get('/api/weather/history', requiereSesionUnica, async (req, res) => {
 });
 
 /* ========== Lluvia total mensual (suma precipTotal) ========== */
-app.get('/api/lluvia/total/month', requiereSesionUnica, async (req, res) => {
+// PUBLICAMOS esta ruta para que el panel funcione sin sesión
+app.get('/api/lluvia/total/month', async (req, res) => {
   try {
     const apiKey    = process.env.WU_API_KEY;
     const stationId = req.query.stationId || process.env.WU_STATION_ID;
@@ -244,7 +251,8 @@ app.get('/api/lluvia/total/month', requiereSesionUnica, async (req, res) => {
 });
 
 /* ========== Lluvia total anual (con aliases para el front) ========== */
-app.get('/api/lluvia/total/year', requiereSesionUnica, async (req, res) => {
+// PUBLICAMOS esta ruta para que el panel funcione sin sesión
+app.get('/api/lluvia/total/year', async (req, res) => {
   try {
     const apiKey    = process.env.WU_API_KEY;
     const stationId = req.query.stationId || process.env.WU_STATION_ID;
@@ -294,8 +302,13 @@ app.get('/api/lluvia/total', (req, res) => res.redirect(307, '/api/lluvia/total/
 /* ========== Auto actualización de lluvia diaria (sin duplicados) ========== */
 async function actualizarLluviaAutomatica() {
   try {
+    const apiKey    = process.env.WU_API_KEY;
     const stationId = process.env.WU_STATION_ID || "IALFAR32";
-    const resp = await fetch(`https://aver-production.up.railway.app/api/weather/current?stationId=${encodeURIComponent(stationId)}`);
+    if (!apiKey || !stationId) return;
+
+    const url = `https://api.weather.com/v2/pws/observations/current?stationId=${encodeURIComponent(stationId)}&format=json&units=m&apiKey=${encodeURIComponent(apiKey)}`;
+    const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    if (!resp.ok) return;
     const data = await resp.json();
 
     if (data?.observations?.[0]?.metric?.precipTotal != null) {
