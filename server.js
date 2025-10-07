@@ -1,4 +1,4 @@
-// server.js — versión final (login solo usuario, auto lluvia y mensual WU)
+// server.js — versión final con login simple, mensual y anual
 
 const express = require('express');
 const session = require('express-session');
@@ -66,13 +66,7 @@ app.use(express.static(PUBLIC_DIR));
 /* ===================== DB usuarios ===================== */
 const db = new Database(path.join(DB_DIR, 'usuarios.db'));
 db.pragma('journal_mode=wal');
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS users (
-    username TEXT PRIMARY KEY,
-    password TEXT,
-    session_id TEXT
-  )
-`).run();
+db.prepare(`CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, session_id TEXT)`).run();
 
 /* ===================== Healthcheck & raíz ===================== */
 app.get(['/health', '/salud'], (req, res) => res.status(200).send('OK'));
@@ -157,12 +151,11 @@ app.post('/logout', (req, res) => {
 /* ========== Weather Underground: condiciones actuales ========== */
 app.get('/api/weather/current', requiereSesionUnica, async (req, res) => {
   try {
-    const apiKey   = process.env.WU_API_KEY;
+    const apiKey = process.env.WU_API_KEY;
     const stationId = req.query.stationId || process.env.WU_STATION_ID;
-    const units    = req.query.units || 'm';
     if (!apiKey || !stationId) return res.status(400).json({ error: 'config_missing' });
 
-    const url = `https://api.weather.com/v2/pws/observations/current?stationId=${encodeURIComponent(stationId)}&format=json&units=${encodeURIComponent(units)}&apiKey=${encodeURIComponent(apiKey)}`;
+    const url = `https://api.weather.com/v2/pws/observations/current?stationId=${stationId}&format=json&units=m&apiKey=${apiKey}`;
     const r = await fetch(url);
     const body = await r.text();
     if (!r.ok) return res.status(r.status).json({ error: 'weather.com denied' });
@@ -174,25 +167,19 @@ app.get('/api/weather/current', requiereSesionUnica, async (req, res) => {
   }
 });
 
-/* ========== Weather Underground: histórico diario ========== */
-/* Acepta YYYYMMDD o YYYY-MM-DD y recorta endDate a HOY si viene futuro */
+/* ========== Histórico diario (YYYYMMDD o YYYY-MM-DD) ========== */
 app.get('/api/weather/history', requiereSesionUnica, async (req, res) => {
   try {
-    const apiKey    = process.env.WU_API_KEY;
+    const apiKey = process.env.WU_API_KEY;
     const stationId = req.query.stationId || process.env.WU_STATION_ID;
     let { startDate, endDate } = req.query;
-    const units     = req.query.units || 'm';
-
+    const units = 'm';
     if (!apiKey || !stationId) return res.status(400).json({ error: 'config_missing' });
-    if (!startDate || !endDate) return res.status(400).json({ error: 'params_missing', detalle: 'startDate y endDate son obligatorios' });
+    if (!startDate || !endDate) return res.status(400).json({ error: 'params_missing' });
 
     const norm = s => String(s).replace(/-/g, '').slice(0, 8);
     startDate = norm(startDate);
-    endDate   = norm(endDate);
-    if (!/^\d{8}$/.test(startDate) || !/^\d{8}$/.test(endDate)) {
-      return res.status(400).json({ error: 'bad_date_format', detalle: 'Usa YYYYMMDD o YYYY-MM-DD' });
-    }
-
+    endDate = norm(endDate);
     const today = new Date();
     const pad = n => String(n).padStart(2, '0');
     const todayStr = `${today.getFullYear()}${pad(today.getMonth()+1)}${pad(today.getDate())}`;
@@ -206,107 +193,107 @@ app.get('/api/weather/history', requiereSesionUnica, async (req, res) => {
     url.searchParams.set('endDate', endDate);
     url.searchParams.set('apiKey', apiKey);
 
-    const r = await fetch(url, { headers: { 'Accept': 'application/json,text/plain,*/*' } });
-    const ct = (r.headers.get('content-type') || '').toLowerCase();
+    const r = await fetch(url);
     const body = await r.text();
+    if (!r.ok) return res.status(r.status).json({ error: 'weather.com denied' });
 
-    if (!r.ok) {
-      console.error('Upstream /history error', r.status, ct, body.slice(0, 300));
-      return res.status(r.status).json({ error: 'weather.com denied', status: r.status });
-    }
-    if (!ct.includes('application/json')) {
-      console.error('Unexpected content-type /history:', ct, body.slice(0, 300));
-      return res.status(502).json({ error: 'Invalid response from weather.com' });
-    }
-
-    res.set('Cache-Control', 'public, max-age=300');
     res.type('application/json').send(body);
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'Weather history proxy failed' });
+    res.status(500).json({ error: 'Weather history failed' });
   }
 });
 
-/* ========== NUEVO: total de lluvia del MES (suma precipTotal) ========== */
-/* Uso: GET /api/lluvia/total/month?ym=2025-10  (o year=2025&month=10) */
+/* ========== Lluvia total mensual ========== */
 app.get('/api/lluvia/total/month', requiereSesionUnica, async (req, res) => {
   try {
-    const apiKey    = process.env.WU_API_KEY;
+    const apiKey = process.env.WU_API_KEY;
+    const stationId = req.query.stationId || process.env.WU_STATION_ID;
+    const ym = req.query.ym;
+    if (!apiKey || !stationId || !ym) return res.status(400).json({ error: 'params_missing' });
+    const [y,m] = ym.split('-');
+    const pad = n => String(n).padStart(2, '0');
+    const startDate = `${y}${pad(m)}01`;
+    const endDate = `${y}${pad(m)}31`;
+
+    const url = new URL('https://api.weather.com/v2/pws/history/daily');
+    url.searchParams.set('stationId', stationId);
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('units', 'm');
+    url.searchParams.set('startDate', startDate);
+    url.searchParams.set('endDate', endDate);
+    url.searchParams.set('apiKey', apiKey);
+
+    const r = await fetch(url);
+    const data = await r.json();
+    const obs = data?.observations || [];
+    const total = obs.reduce((a, d) => a + (+d?.metric?.precipTotal || 0), 0);
+    res.json({ year: +y, month: +m, total_mm: +total.toFixed(2), days: obs.length });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'month_failed' });
+  }
+});
+
+/* ========== NUEVO: Lluvia total anual ========== */
+app.get('/api/lluvia/total/year', requiereSesionUnica, async (req, res) => {
+  try {
+    const apiKey = process.env.WU_API_KEY;
     const stationId = req.query.stationId || process.env.WU_STATION_ID;
     if (!apiKey || !stationId) return res.status(400).json({ error: 'config_missing' });
 
-    const ym = req.query.ym;
-    let year = parseInt(req.query.year, 10);
-    let month = parseInt(req.query.month, 10);
-
-    if (ym && /^\d{4}-\d{2}$/.test(ym)) {
-      year = parseInt(ym.slice(0,4), 10);
-      month = parseInt(ym.slice(5,7), 10);
-    }
-    if (!year || !month || month < 1 || month > 12) {
-      return res.status(400).json({ error: 'params_missing', detalle: 'Proporciona ym=YYYY-MM o year y month' });
-    }
-
+    const now = new Date();
+    const year = now.getFullYear();
     const pad = n => String(n).padStart(2, '0');
-    const startDate = `${year}${pad(month)}01`;
-    const endDate   = `${year}${pad(month)}31`; // WU ignora días inexistentes
+    const startDate = `${year}0101`;
+    const endDate = `${year}${pad(now.getMonth()+1)}${pad(now.getDate())}`;
 
-    // Llamamos a nuestra propia ruta history (normaliza y recorta a hoy)
-    const url = new URL(`${req.protocol}://${req.get('host')}/api/weather/history`);
+    const url = new URL('https://api.weather.com/v2/pws/history/daily');
     url.searchParams.set('stationId', stationId);
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('units', 'm');
     url.searchParams.set('startDate', startDate);
     url.searchParams.set('endDate', endDate);
-    url.searchParams.set('units', 'm');
+    url.searchParams.set('apiKey', apiKey);
 
-    const r = await fetch(url.href, { headers: { Cookie: req.headers.cookie || '' } });
-    if (!r.ok) return res.status(r.status).json({ error: 'history_failed' });
+    const r = await fetch(url);
     const data = await r.json();
+    const obs = data?.observations || [];
+    const total = obs.reduce((a, d) => a + (+d?.metric?.precipTotal || 0), 0);
 
-    const obs = Array.isArray(data?.observations) ? data.observations : [];
-    const total = obs.reduce((acc, d) => acc + (+d?.metric?.precipTotal || 0), 0);
-
-    return res.json({
-      year, month,
-      total_mm: Number(total.toFixed(2)),
+    res.json({
+      total_mm: +total.toFixed(2),
+      year,
+      desde: `${year}-01-01`,
+      hasta: `${year}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`,
       days: obs.length
     });
   } catch (e) {
-    console.error('Error /api/lluvia/total/month:', e);
-    res.status(500).json({ error: 'calc_failed' });
+    console.error('Error /api/lluvia/total/year:', e);
+    res.status(500).json({ error: 'year_failed' });
   }
 });
 
-/* ========== AUTO ACTUALIZADOR DE LLUVIA DIARIA (sin duplicados) ========== */
+/* ========== Auto actualización de lluvia diaria ========== */
 async function actualizarLluviaAutomatica() {
   try {
     const stationId = process.env.WU_STATION_ID || "IALFAR32";
-    // Si sirves front y back en el mismo dominio, podrías llamar directamente a WU;
-    // uso nuestra proxy actual para unificar manejo de claves.
-    const baseUrl = `https://aver-production.up.railway.app/api/weather/current?stationId=${encodeURIComponent(stationId)}`;
-    const resp = await fetch(baseUrl);
+    const resp = await fetch(`https://aver-production.up.railway.app/api/weather/current?stationId=${stationId}`);
     const data = await resp.json();
 
     if (data?.observations?.[0]?.metric?.precipTotal != null) {
       const mm = data.observations[0].metric.precipTotal;
       const fecha = new Date().toISOString().split("T")[0];
 
-      const rainPath = path.join(DB_DIR, 'lluvia.db');
-      const rainDB = new Database(rainPath);
+      const rainDB = new Database(path.join(DB_DIR, 'lluvia.db'));
       rainDB.pragma('journal_mode=wal');
       rainDB.prepare(`CREATE TABLE IF NOT EXISTS lluvia (fecha TEXT PRIMARY KEY, mm REAL)`).run();
       const row = rainDB.prepare("SELECT * FROM lluvia WHERE fecha=?").get(fecha);
-      if (row) {
-        rainDB.prepare("UPDATE lluvia SET mm=? WHERE fecha=?").run(mm, fecha);
-        console.log(`💧 Lluvia actualizada automáticamente: ${mm} mm (${fecha})`);
-      } else {
-        rainDB.prepare("INSERT INTO lluvia (fecha,mm) VALUES (?,?)").run(fecha, mm);
-        console.log(`💧 Lluvia registrada automáticamente: ${mm} mm (${fecha})`);
-      }
+      if (row) rainDB.prepare("UPDATE lluvia SET mm=? WHERE fecha=?").run(mm, fecha);
+      else rainDB.prepare("INSERT INTO lluvia (fecha,mm) VALUES (?,?)").run(fecha, mm);
       rainDB.close();
     }
-  } catch (err) {
-    console.error("⚠️ Error al actualizar lluvia automática:", err);
-  }
+  } catch (e) { console.error("⚠️ Auto lluvia:", e); }
 }
 setInterval(actualizarLluviaAutomatica, 6 * 60 * 60 * 1000);
 actualizarLluviaAutomatica();
