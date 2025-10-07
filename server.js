@@ -1,4 +1,4 @@
-// server.js — versión final con login simple, mensual y anual
+// server.js — versión final (login solo usuario, lluvia mensual/anual, auto-lluvia)
 
 const express = require('express');
 const session = require('express-session');
@@ -151,11 +151,12 @@ app.post('/logout', (req, res) => {
 /* ========== Weather Underground: condiciones actuales ========== */
 app.get('/api/weather/current', requiereSesionUnica, async (req, res) => {
   try {
-    const apiKey = process.env.WU_API_KEY;
+    const apiKey    = process.env.WU_API_KEY;
     const stationId = req.query.stationId || process.env.WU_STATION_ID;
+    const units     = req.query.units || 'm';
     if (!apiKey || !stationId) return res.status(400).json({ error: 'config_missing' });
 
-    const url = `https://api.weather.com/v2/pws/observations/current?stationId=${stationId}&format=json&units=m&apiKey=${apiKey}`;
+    const url = `https://api.weather.com/v2/pws/observations/current?stationId=${encodeURIComponent(stationId)}&format=json&units=${encodeURIComponent(units)}&apiKey=${encodeURIComponent(apiKey)}`;
     const r = await fetch(url);
     const body = await r.text();
     if (!r.ok) return res.status(r.status).json({ error: 'weather.com denied' });
@@ -167,19 +168,24 @@ app.get('/api/weather/current', requiereSesionUnica, async (req, res) => {
   }
 });
 
-/* ========== Histórico diario (YYYYMMDD o YYYY-MM-DD) ========== */
+/* ========== Weather Underground: histórico diario (flex fechas) ========== */
 app.get('/api/weather/history', requiereSesionUnica, async (req, res) => {
   try {
-    const apiKey = process.env.WU_API_KEY;
+    const apiKey    = process.env.WU_API_KEY;
     const stationId = req.query.stationId || process.env.WU_STATION_ID;
     let { startDate, endDate } = req.query;
-    const units = 'm';
+    const units     = 'm';
+
     if (!apiKey || !stationId) return res.status(400).json({ error: 'config_missing' });
     if (!startDate || !endDate) return res.status(400).json({ error: 'params_missing' });
 
     const norm = s => String(s).replace(/-/g, '').slice(0, 8);
     startDate = norm(startDate);
-    endDate = norm(endDate);
+    endDate   = norm(endDate);
+    if (!/^\d{8}$/.test(startDate) || !/^\d{8}$/.test(endDate)) {
+      return res.status(400).json({ error: 'bad_date_format', detalle: 'Usa YYYYMMDD o YYYY-MM-DD' });
+    }
+
     const today = new Date();
     const pad = n => String(n).padStart(2, '0');
     const todayStr = `${today.getFullYear()}${pad(today.getMonth()+1)}${pad(today.getDate())}`;
@@ -193,28 +199,29 @@ app.get('/api/weather/history', requiereSesionUnica, async (req, res) => {
     url.searchParams.set('endDate', endDate);
     url.searchParams.set('apiKey', apiKey);
 
-    const r = await fetch(url);
+    const r = await fetch(url, { headers: { 'Accept': 'application/json,text/plain,*/*' } });
     const body = await r.text();
     if (!r.ok) return res.status(r.status).json({ error: 'weather.com denied' });
 
     res.type('application/json').send(body);
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'Weather history failed' });
+    res.status(500).json({ error: 'Weather history proxy failed' });
   }
 });
 
-/* ========== Lluvia total mensual ========== */
+/* ========== Lluvia total mensual (suma precipTotal) ========== */
 app.get('/api/lluvia/total/month', requiereSesionUnica, async (req, res) => {
   try {
-    const apiKey = process.env.WU_API_KEY;
+    const apiKey    = process.env.WU_API_KEY;
     const stationId = req.query.stationId || process.env.WU_STATION_ID;
     const ym = req.query.ym;
     if (!apiKey || !stationId || !ym) return res.status(400).json({ error: 'params_missing' });
-    const [y,m] = ym.split('-');
+
+    const [y, m] = ym.split('-');
     const pad = n => String(n).padStart(2, '0');
     const startDate = `${y}${pad(m)}01`;
-    const endDate = `${y}${pad(m)}31`;
+    const endDate   = `${y}${pad(m)}31`;
 
     const url = new URL('https://api.weather.com/v2/pws/history/daily');
     url.searchParams.set('stationId', stationId);
@@ -226,8 +233,9 @@ app.get('/api/lluvia/total/month', requiereSesionUnica, async (req, res) => {
 
     const r = await fetch(url);
     const data = await r.json();
-    const obs = data?.observations || [];
+    const obs = Array.isArray(data?.observations) ? data.observations : [];
     const total = obs.reduce((a, d) => a + (+d?.metric?.precipTotal || 0), 0);
+
     res.json({ year: +y, month: +m, total_mm: +total.toFixed(2), days: obs.length });
   } catch (e) {
     console.error(e);
@@ -235,18 +243,18 @@ app.get('/api/lluvia/total/month', requiereSesionUnica, async (req, res) => {
   }
 });
 
-/* ========== NUEVO: Lluvia total anual ========== */
+/* ========== Lluvia total anual (con aliases para el front) ========== */
 app.get('/api/lluvia/total/year', requiereSesionUnica, async (req, res) => {
   try {
-    const apiKey = process.env.WU_API_KEY;
+    const apiKey    = process.env.WU_API_KEY;
     const stationId = req.query.stationId || process.env.WU_STATION_ID;
     if (!apiKey || !stationId) return res.status(400).json({ error: 'config_missing' });
 
-    const now = new Date();
+    const now  = new Date();
     const year = now.getFullYear();
-    const pad = n => String(n).padStart(2, '0');
+    const pad  = n => String(n).padStart(2, '0');
     const startDate = `${year}0101`;
-    const endDate = `${year}${pad(now.getMonth()+1)}${pad(now.getDate())}`;
+    const endDate   = `${year}${pad(now.getMonth()+1)}${pad(now.getDate())}`;
 
     const url = new URL('https://api.weather.com/v2/pws/history/daily');
     url.searchParams.set('stationId', stationId);
@@ -257,12 +265,18 @@ app.get('/api/lluvia/total/year', requiereSesionUnica, async (req, res) => {
     url.searchParams.set('apiKey', apiKey);
 
     const r = await fetch(url);
+    if (!r.ok) return res.status(r.status).json({ error: 'weather.com denied', status: r.status });
+
     const data = await r.json();
-    const obs = data?.observations || [];
-    const total = obs.reduce((a, d) => a + (+d?.metric?.precipTotal || 0), 0);
+    const obs = Array.isArray(data?.observations) ? data.observations : [];
+    const sum = obs.reduce((acc, d) => acc + (+d?.metric?.precipTotal || 0), 0);
+    const total = Number(sum.toFixed(2));
 
     res.json({
-      total_mm: +total.toFixed(2),
+      total_mm: total,       // nombre “correcto”
+      total: total,          // alias
+      totalLluvia: total,    // alias clásico usado en otros fronts
+      value: total,          // alias extra
       year,
       desde: `${year}-01-01`,
       hasta: `${year}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`,
@@ -274,11 +288,14 @@ app.get('/api/lluvia/total/year', requiereSesionUnica, async (req, res) => {
   }
 });
 
-/* ========== Auto actualización de lluvia diaria ========== */
+/* Alias por si el front usaba una ruta vieja */
+app.get('/api/lluvia/total', (req, res) => res.redirect(307, '/api/lluvia/total/year'));
+
+/* ========== Auto actualización de lluvia diaria (sin duplicados) ========== */
 async function actualizarLluviaAutomatica() {
   try {
     const stationId = process.env.WU_STATION_ID || "IALFAR32";
-    const resp = await fetch(`https://aver-production.up.railway.app/api/weather/current?stationId=${stationId}`);
+    const resp = await fetch(`https://aver-production.up.railway.app/api/weather/current?stationId=${encodeURIComponent(stationId)}`);
     const data = await resp.json();
 
     if (data?.observations?.[0]?.metric?.precipTotal != null) {
