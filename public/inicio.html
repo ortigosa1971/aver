@@ -295,23 +295,9 @@
       fetchWeatherData();
       fetchForecast();
       setInterval(fetchWeatherData, 60000);
-
-      // 👇 Handler único para el botón mensual:
-      //    1) Calcula el mes seleccionado
-      //    2) Refresca el total anual al terminar
       const botonMes = document.getElementById("boton-mes");
       if (botonMes) {
-        botonMes.addEventListener("click", () => {
-          try {
-            mostrarLluviaAcumuladaPorMes();
-          } finally {
-            // Recalcula el total anual (una sola llamada para todo el año actual)
-            if (typeof window.calcularLluviaAcumuladaAnual === 'function') {
-              // pequeño diferido para no bloquear la UI del gráfico
-              setTimeout(() => window.calcularLluviaAcumuladaAnual(), 0);
-            }
-          }
-        });
+        botonMes.addEventListener("click", mostrarLluviaAcumuladaPorMes);
       }
     });
 
@@ -337,48 +323,599 @@
   </script>
 
   <script>
-  // === Total lluvia del año actual (UNA SOLA llamada) ===
-  window.calcularLluviaAcumuladaAnual = async function calcularLluviaAcumuladaAnual(){
-    const el = document.getElementById('total-lluvia');
-    const rangoEl = document.getElementById('total-lluvia-rango');
-    if (!el) return;
+  // === Cargar total lluvia del año actual desde tu backend ===
+  <script>
+// === Total lluvia del año actual: 1 llamada (1/1 -> hoy) con respaldo ===
+window.calcularLluviaAcumuladaAnual = async function () {
+  const el = document.getElementById('total-lluvia');
+  const rangoEl = document.getElementById('total-lluvia-rango');
+  if (!el) return;
+
+  const stationId = 'IALFAR32';
+  const now = new Date();
+  const year = now.getFullYear();
+  const startDate = `${year}0101`;
+  const endDateToday = `${year}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+  const baseUrl = `${window.RAIL_API_BASE}/api/weather/history?stationId=${encodeURIComponent(stationId)}`;
+
+  async function sumarRango(inicio, fin) {
+    const url = `${baseUrl}&startDate=${encodeURIComponent(inicio)}&endDate=${encodeURIComponent(fin)}`;
+    const r = await fetch(url, { credentials: 'include', cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status} en ${inicio}-${fin}`);
+    const data = await r.json();
+    const arr = data?.observations || data?.data || [];
+    return arr.reduce((sum, d) => sum + (Number(d.metric?.precipTotal ?? d.precipTotal ?? 0) || 0), 0);
+  }
+
+  try {
+    // 1) Intento rápido: todo el año hasta HOY en una sola llamada
+    const totalAnual = await sumarRango(startDate, endDateToday);
+    el.textContent = totalAnual.toFixed(1) + ' mm';
+    rangoEl.textContent = `(año actual ${year})`;
+  } catch (e1) {
+    console.warn('Rango anual directo falló, uso respaldo mes a mes:', e1);
+    // 2) Respaldo: mes a mes hasta el mes actual
     try {
-      const year = new Date().getFullYear();
-      const stationId = 'IALFAR32';
-      const startDate = `${year}0101`;
-      const endDate   = `${year}1231`;
-      const url = `${window.RAIL_API_BASE}/api/weather/history?stationId=${encodeURIComponent(stationId)}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`;
-
-      const r = await fetch(url, { credentials: 'include', cache: 'no-store' });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const data = await r.json();
-      const arr = data?.observations || data?.data || [];
-
-      const totalAnual = arr.reduce(
-        (sum, d) => sum + (Number(d.metric?.precipTotal ?? d.precipTotal ?? 0) || 0),
-        0
-      );
-
-      el.textContent = totalAnual.toFixed(1) + ' mm';
-
-      // Si el backend devuelve fechas de rango, podrías mostrarlas; si no, mostramos el año.
+      let total = 0;
+      for (let m = 0; m <= now.getMonth(); m++) {
+        const y = year;
+        const mi = String(m+1).padStart(2,'0');
+        const inicio = `${y}${mi}01`;
+        // último día del mes m
+        const lastDay = new Date(y, m+1, 0).getDate();
+        const fin = m === now.getMonth() ? endDateToday : `${y}${mi}${String(lastDay).padStart(2,'0')}`;
+        total += await sumarRango(inicio, fin);
+      }
+      el.textContent = total.toFixed(1) + ' mm';
       rangoEl.textContent = `(año actual ${year})`;
-    } catch (e) {
-      console.error(e);
+    } catch (e2) {
+      console.error('También falló el respaldo:', e2);
       el.textContent = '—';
-      el.title = 'No se pudo cargar la lluvia anual';
-      document.getElementById('total-lluvia-rango').textContent = '(sin datos)';
+      rangoEl.textContent = '(sin datos)';
+      el.title = 'No se pudo calcular la lluvia anual';
     }
-  };
+  }
+};
 
-  // Ejecuta el cálculo anual al cargar
-  document.addEventListener('DOMContentLoaded', () => {
-    window.calcularLluviaAcumuladaAnual();
-  });
-  </script>
+// Ejecuta al cargar y también tras calcular el mensual
+document.addEventListener('DOMContentLoaded', () => {
+  window.calcularLluviaAcumuladaAnual?.();
+
+  const botonMes = document.getElementById('boton-mes');
+  if (botonMes) {
+    botonMes.addEventListener('click', () => {
+      // tu función mensual ya existe en la página
+      try { typeof mostrarLluviaAcumuladaPorMes === 'function' && mostrarLluviaAcumuladaPorMes(); }
+      finally { setTimeout(() => window.calcularLluviaAcumuladaAnual?.(), 0); }
+    });
+  }
+});
+</script>
+
 
 </body>
 </html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
