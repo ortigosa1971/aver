@@ -291,6 +291,43 @@
         });
     }
 
+    // === NUEVO: calcular lluvia anual directamente desde WU (vía tu backend /api/weather/history) ===
+    async function cargarTotalLluviaAnualDesdeWU() {
+      const el = document.getElementById('total-lluvia');
+      const rangoEl = document.getElementById('total-lluvia-rango');
+      if (!el) return;
+
+      try {
+        const ahora = new Date();
+        const year = ahora.getFullYear();
+        const startDate = `${year}0101`;
+        const mmStr = String(ahora.getMonth() + 1).padStart(2, '0');
+        const ddStr = String(ahora.getDate()).padStart(2, '0');
+        const endDate = `${year}${mmStr}${ddStr}`;
+
+        const url = `${window.RAIL_API_BASE}/api/weather/history?stationId=${encodeURIComponent(STATION_ID)}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`;
+        const r = await fetch(url, FETCH_OPTS);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        const arr = data?.observations || data?.data || [];
+
+        let total = 0;
+        for (const d of arr) {
+          const p = d?.metric?.precipTotal ?? d?.precipTotal ?? 0;
+          const n = Number(p);
+          if (Number.isFinite(n)) total += n; // mm
+        }
+
+        el.textContent = (Number.isFinite(total) ? total : 0).toFixed(1) + ' mm';
+        rangoEl.textContent = `(${year}: 01/01 → ${ddStr}/${mmStr})`;
+        el.removeAttribute('title');
+      } catch (e) {
+        console.error('Error lluvia anual:', e);
+        el.textContent = '—';
+        el.title = 'No se pudo calcular la lluvia anual (WU)';
+      }
+    }
+
     document.addEventListener("DOMContentLoaded", () => {
       fetchWeatherData();
       fetchForecast();
@@ -299,6 +336,8 @@
       if (botonMes) {
         botonMes.addEventListener("click", mostrarLluviaAcumuladaPorMes);
       }
+      // Llamada al nuevo cálculo de lluvia anual
+      cargarTotalLluviaAnualDesdeWU();
     });
 
     // Verificación de sesión activa contra el backend
@@ -322,31 +361,7 @@
     }, 1500);
   </script>
 
-  <script>
-  // === Cargar total lluvia del año actual desde tu backend ===
-  (async function cargarTotalLluviaAnual(){
-    const el = document.getElementById('total-lluvia');
-    const rangoEl = document.getElementById('total-lluvia-rango');
-    if (!el) return;
-    try {
-      const r = await fetch(`${window.RAIL_API_BASE}/api/lluvia/total/year`, { credentials: 'include', cache: 'no-store' });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const data = await r.json();
-      const mm = Number(data?.total_mm ?? 0);
-      el.textContent = (Number.isFinite(mm) ? mm : 0).toFixed(1) + ' mm';
-
-      if (data?.desde && data?.hasta) {
-        rangoEl.textContent = `(${data.year}: ${data.desde} → ${data.hasta})`;
-      } else {
-        rangoEl.textContent = '(año actual)';
-      }
-    } catch (e) {
-      console.error(e);
-      el.textContent = '—';
-      el.title = 'No se pudo cargar la lluvia anual';
-    }
-  })();
-  </script>
+  <!-- Eliminado el IIFE anterior que llamaba a /api/lluvia/total/year y reemplazado por la versión que suma WU -->
 
 </body>
 </html>
