@@ -329,27 +329,159 @@
     const rangoEl = document.getElementById('total-lluvia-rango');
     if (!el) return;
     try {
-      const r = await fetch(`${window.RAIL_API_BASE}/api/lluvia/total/year`, { credentials: 'include', cache: 'no-store' });
+      // Construir rango del año actual
+      const now = new Date();
+      const y = now.getFullYear();
+      const pad = n => String(n).padStart(2, '0');
+      const startDate = `${y}0101`;
+      const endDate = `${y}${pad(now.getMonth()+1)}${pad(now.getDate())}`;
+
+      // Usar el proxy ya existente que funciona /api/weather/history
+      const url = `${window.RAIL_API_BASE}/api/weather/history?stationId=${encodeURIComponent(STATION_ID)}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`;
+      const r = await fetch(url, { credentials: 'include', cache: 'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const data = await r.json();
-      const mm = Number(data?.total_mm ?? 0);
-      el.textContent = (Number.isFinite(mm) ? mm : 0).toFixed(1) + ' mm';
 
-      if (data?.desde && data?.hasta) {
-        rangoEl.textContent = `(${data.year}: ${data.desde} → ${data.hasta})`;
-      } else {
-        rangoEl.textContent = '(año actual)';
+      const arr = Array.isArray(data?.observations) ? data.observations : [];
+      const total = arr.reduce((acc, d) => acc + (+d?.metric?.precipTotal || +d?.precipTotal || 0), 0);
+
+      el.textContent = Number.isFinite(total) ? total.toFixed(1) + ' mm' : '0.0 mm';
+      if (rangoEl) {
+        rangoEl.textContent = `(${y}: ${y}-01-01 → ${y}-${pad(now.getMonth()+1)}-${pad(now.getDate())})`;
       }
     } catch (e) {
-      console.error(e);
+      console.error('cargarTotalLluviaAnual:', e);
       el.textContent = '—';
-      el.title = 'No se pudo cargar la lluvia anual';
+      el.title = 'No se pudo cargar la lluvia anual: ' + (e?.message || e);
     }
   })();
   </script>
 
 </body>
 </html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
