@@ -1,10 +1,9 @@
 <!doctype html>
 <html lang="es">
 <head>
-    <meta name="rail-api-base" content="https://aver-production.up.railway.app">
-
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="rail-api-base" content="https://aver-production.up.railway.app">
   <title>Iniciar sesión</title>
   <style>
     body{background:#0d3b86;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
@@ -21,33 +20,59 @@
 <body>
   <div class="card">
     <h1>Iniciar sesión</h1>
-    <div id="msg" class="msg"></div>
+
+    <!-- Área de mensajes accesible -->
+    <div id="msg" class="msg" role="status" aria-live="polite"></div>
 
     <!-- IMPORTANTE: POST a /login con name="usuario" -->
-    <form method="POST" action="/login">
+    <form method="POST" action="/login" novalidate>
+      <!-- Ejemplo de token CSRF si tu backend lo requiere -->
+      <!-- <input type="hidden" name="csrf_token" value="{{ csrf_token }}"> -->
       <label for="usuario">Usuario:</label>
-      <input id="usuario" name="usuario" required autocomplete="username" />
+      <input
+        id="usuario"
+        name="usuario"
+        type="text"
+        required
+        autocomplete="username"
+        inputmode="text"
+        autofocus
+      />
       <button type="submit">Entrar</button>
     </form>
+
+    <noscript>
+      <p class="msg err" style="display:block">Activa JavaScript para ver los mensajes de estado.</p>
+    </noscript>
   </div>
 
   <script>
-    // Muestra mensajes si el server redirige con ?error=... o ?msg=logout
+    // Muestra mensajes si el servidor redirige con ?error=... o ?msg=logout
     const M = {
-      sesion_activa:"Tu cuenta ya está activa en otra máquina.",
-      conectado_en_otra_maquina:"Tu sesión fue cerrada porque iniciaste en otra máquina.",
-      sesion_invalida:"Sesión inválida. Vuelve a iniciar.",
-      sesion_expirada:"Sesión expirada. Inicia de nuevo.",
-      credenciales:"Usuario inexistente.",
-      interno:"Error interno. Intenta otra vez.",
-      logout:"Sesión cerrada correctamente."
+      sesion: "Tu cuenta ya está activa en otra máquina.",
+      sesion_activa: "Tu cuenta ya está activa en otra máquina.",
+      conectado_en_otra_maquina: "Tu sesión fue cerrada porque iniciaste en otra máquina.",
+      sesion_invalida: "Sesión inválida. Vuelve a iniciar.",
+      sesion_expirada: "Sesión expirada. Inicia de nuevo.",
+      credenciales: "Usuario inexistente.",
+      interno: "Error interno. Intenta otra vez.",
+      logout: "Sesión cerrada correctamente."
     };
-    const q = new URLSearchParams(location.search);
+
+    const q = new URLSearchParams(window.location.search);
     const el = document.getElementById('msg');
-    if (q.has('error')) { el.textContent = M[q.get('error')] || ("Error: " + q.get('error')); el.className="msg err"; el.style.display="block"; }
-    else if (q.get('msg')==='logout') { el.textContent = M.logout; el.className="msg ok"; el.style.display="block"; }
+
+    if (q.has('error')) {
+      const code = q.get('error');
+      el.textContent = M[code] || ("Error: " + code);
+      el.className = "msg err";
+      el.style.display = "block";
+    } else if (q.get('msg') === 'logout') {
+      el.textContent = M.logout;
+      el.className = "msg ok";
+      el.style.display = "block";
+    }
   </script>
 </body>
 </html>
-
 
