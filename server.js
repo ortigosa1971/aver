@@ -1,188 +1,144 @@
+
 /**
- * server.js — versión completa con corrección de SQLite en Railway
- * y protecciones de acceso a /inicio y archivos estáticos sensibles.
+ * server.js — Enforce login before /inicio y /historial
+ * Requiere:
+ *   npm i express express-session connect-sqlite3 better-sqlite3
+ * (ya están en package.json según tu ZIP)
  *
- * Requisitos:
- *   npm i express express-session connect-sqlite3 sqlite3
- *
- * Variables de entorno recomendadas:
+ * Variables de entorno (recomendado en producción):
  *   SESSION_SECRET=un_secreto_largo_y_unico
  *   NODE_ENV=production
- *   (Opcional) SESSIONS_DIR=/data/sessions  -> si montas un Volume en /data
+ *   PORT=3000
+ *   SESSIONS_DIR=./db   (o /data/sessions en Railway con volumen)
  */
-
 const path = require("path");
 const fs = require("fs");
 const express = require("express");
 const session = require("express-session");
-const SQLiteStore = require("connect-sqlite3")(session);
+const SQLiteStoreFactory = require("connect-sqlite3");
+const SQLiteStore = SQLiteStoreFactory(session);
 
 const app = express();
-
-// ====== Config básica ======
-const PORT = process.env.PORT || 8080;
 const NODE_ENV = process.env.NODE_ENV || "development";
 const IS_PROD = NODE_ENV === "production";
-const PUBLIC_DIR = path.join(__dirname, "public");
+const PORT = process.env.PORT || 3000;
 
-// Confía en proxy (Railway)
-app.set("trust proxy", 1);
+// === Helpers ===
+const p = (...segs) => path.join(__dirname, ...segs);
+const PUBLIC_DIR = p("public");
+const SESSIONS_DIR = process.env.SESSIONS_DIR || p("db");
+if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: True = True });
 
-// Body parsers
+// === Middlewares base ===
+app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
 
-// ====== Sesiones (con ruta escribible garantizada) ======
-const DEFAULT_SESSIONS_DIR =
-  process.env.SESSIONS_DIR ||
-  (fs.existsSync("/data") ? "/data/sessions" : "/tmp/sessions"); // /data si hay volumen, si no /tmp
-
-// Asegura que la carpeta existe antes de abrir SQLite
-try {
-  fs.mkdirSync(DEFAULT_SESSIONS_DIR, { recursive: true });
-  console.log(`[sesiones] Carpeta de sesiones: ${DEFAULT_SESSIONS_DIR}`);
-} catch (e) {
-  console.error("[sesiones] No se pudo crear la carpeta de sesiones:", e);
-  // fallback duro a /tmp/sessions
-  try {
-    fs.mkdirSync("/tmp/sessions", { recursive: true });
-    console.log("[sesiones] Usando fallback /tmp/sessions");
-  } catch (e2) {
-    console.error("[sesiones] Falló también /tmp/sessions:", e2);
-  }
-}
-
+// === Sesiones (cookie + store en SQLite) ===
 app.use(
   session({
-    name: "sid",
-    secret: process.env.SESSION_SECRET || "CAMBIA_ESTE_SECRETO",
-    resave: false,
-    saveUninitialized: true,
     store: new SQLiteStore({
+      dir: SESSIONS_DIR,
       db: "sessions.sqlite",
-      dir: fs.existsSync(DEFAULT_SESSIONS_DIR)
-        ? DEFAULT_SESSIONS_DIR
-        : "/tmp/sessions",
     }),
+    name: "sid",
+    secret: process.env.SESSION_SECRET || "dev-only-secret-change-me",
+    resave: false,
+    saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      sameSite: IS_PROD ? "none" : "lax",
-      secure: IS_PROD, // true en producción (HTTPS)
+      sameSite: "lax",
+      secure: IS_PROD, // true en producción detrás de HTTPS
       maxAge: 1000 * 60 * 60 * 8, // 8 horas
     },
   })
 );
 
-// ====== Helpers / Middlewares ======
+// === Simulación de usuarios (usa tu DB real si ya la tienes) ===
+// Si tu app ya tiene una tabla users en ./db/usuarios.db con usuario/contraseña,
+// reemplaza validateUser por tu consulta real.
+const validateUser = async (username, password) => {
+  // TODO: Reemplaza por verificación contra SQLite (usuarios.db)
+  // Dev sólo para probar:
+  if (username === "admin" && password === "admin") return { id: 1, username: "admin" };
+  return null;
+};
 
-/**
- * Exige haber pasado por la landing ("/").
- */
-function requireLanding(req, res, next) {
-  if (req.session?.pasoLanding) return next();
-  const url = new URL(`${req.protocol}://${req.get("host")}${req.originalUrl}`);
-  return res.redirect(`/?next=${encodeURIComponent(url.pathname)}`);
+// === Middleware de autenticación ===
+function requireAuth(req, res, next) {
+  if (req.session && req.session.user) return next();
+  return res.redirect("/login.html");
 }
 
-/**
- * (Opcional) Requiere sesión autenticada.
- * Ajusta a tu lógica real si tienes login. Ahora mismo deja pasar si no usas login.
- */
-function requiereSesionUnica(req, res, next) {
-  if (req.session?.usuario || req.session?.autenticado) return next();
-  // Si NO usas login, no bloquees:
-  return next();
-  // Si SÍ quieres bloquear cuando no haya login, usa:
-  // return res.redirect("/");
-}
-
-// ====== Rutas ======
-
-// Landing "/" — marca que se pasó por aquí y sirve tu login/landing
-app.get("/", (req, res) => {
-  req.session.pasoLanding = true;
-
-  const loginFile = path.join(PUBLIC_DIR, "login.html");
-  if (fs.existsSync(loginFile)) {
-    return res.sendFile(loginFile);
-  }
-  res.send(
-    `<h1>Landing</h1><p>Has pasado por la landing. <a href="/inicio">Ir a inicio</a></p>`
-  );
-});
-
-// Ejemplo de login (ajústalo a tu caso real)
-app.post("/login", (req, res) => {
-  const { usuario } = req.body;
-  if (usuario && String(usuario).trim()) {
-    req.session.usuario = String(usuario).trim();
-    req.session.autenticado = true;
-    return res.redirect("/inicio");
-  }
-  return res.redirect("/");
-});
-
-// Página protegida "/inicio"
-app.get("/inicio", requireLanding, requiereSesionUnica, (req, res) => {
-  const inicioFile = path.join(PUBLIC_DIR, "inicio.html");
-  if (fs.existsSync(inicioFile)) {
-    return res.sendFile(inicioFile);
-  }
-  res.send(
-    `<h1>Inicio</h1><p>Bienvenido${
-      req.session.usuario ? ", " + req.session.usuario : ""
-    }.</p>`
-  );
-});
-
-// (Opcional) Otra página protegida
-app.get("/historial", requireLanding, requiereSesionUnica, (req, res) => {
-  const f = path.join(PUBLIC_DIR, "historial.html");
-  if (fs.existsSync(f)) return res.sendFile(f);
-  res.send("<h1>Historial</h1>");
-});
-
-// ====== Protección de archivos estáticos sensibles ======
-// Intercepta rutas a archivos que no deben verse directos.
-const archivosProtegidos = new Set([
-  "/inicio.html",
-  "/historial.html",
-  // agrega aquí otros archivos sensibles si los tienes:
-  // "/panel.html", "/privado.html", ...
-]);
-
+// === Bloqueo de acceso directo a HTML protegidos ===
+const PROTECTED_HTML = new Set(["/inicio.html", "/historial.html"]);
 app.use((req, res, next) => {
-  if (archivosProtegidos.has(req.path)) {
-    return requireLanding(req, res, () => requiereSesionUnica(req, res, next));
+  if (PROTECTED_HTML.has(req.path)) {
+    if (!req.session || !req.session.user) {
+      return res.redirect("/login.html");
+    }
   }
   next();
 });
 
-// ====== Servir estáticos (después de la protección) ======
-app.use(
-  express.static(PUBLIC_DIR, {
-    index: false, // evita servir automáticamente /index.html
-    extensions: ["html"], // permite /ruta -> /ruta.html si existe
-    fallthrough: true,
-  })
-);
+// === Rutas de autenticación ===
+app.post("/api/login", async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ ok: false, error: "Faltan credenciales" });
+    }
+    const user = await validateUser(username, password);
+    if (!user) return res.status(401).json({ ok: false, error: "Credenciales inválidas" });
 
-// ====== Logout (opcional) ======
-app.post("/logout", (req, res) => {
+    req.session.user = { id: user.id, username: user.username };
+    return res.json({ ok: true, user: req.session.user });
+  } catch (err) {
+    console.error("Login error:", err);
+    return res.status(500).json({ ok: false, error: "Error interno" });
+  }
+});
+
+app.post("/api/logout", (req, res) => {
   req.session.destroy(() => {
     res.clearCookie("sid");
-    res.redirect("/");
+    return res.json({ ok: true });
   });
 });
 
-// ====== 404 ======
+app.get("/api/me", (req, res) => {
+  if (!req.session || !req.session.user) return res.status(401).json({ ok: false });
+  return res.json({ ok: true, user: req.session.user });
+});
+
+// === Rutas de páginas (servir archivos) ===
+app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "login.html")));
+app.get("/login", (req, res) => res.redirect("/login.html"));
+app.get("/inicio", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC_DIR, "inicio.html")));
+app.get("/historial", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC_DIR, "historial.html")));
+
+// === Archivos estáticos (todo /public excepto los protegidos, ya filtrados arriba) ===
+app.use(express.static(PUBLIC_DIR, {
+  extensions: ["html"],
+  setHeaders(res, filePath) {
+    // Evita cache agresivo en HTMLs
+    if (filePath.endsWith(".html")) {
+      res.setHeader("Cache-Control", "no-store");
+    }
+  },
+}));
+
+// === Ejemplo de API protegida ===
+app.get("/api/mediciones", requireAuth, (req, res) => {
+  // Devuelve datos sólo si logueado
+  res.json({ ok: true, data: [] });
+});
+
+// === 404 ===
 app.use((req, res) => {
   res.status(404).send("<h1>404</h1><p>Recurso no encontrado.</p>");
 });
 
-// ====== Arranque ======
 app.listen(PORT, () => {
-  console.log(
-    `Servidor escuchando en http://localhost:${PORT} (env:${NODE_ENV})`
-  );
+  console.log(`Servidor en http://localhost:${PORT} (env:${NODE_ENV})`);
 });
+
