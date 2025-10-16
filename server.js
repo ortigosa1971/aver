@@ -1,6 +1,10 @@
-
 /**
- * server.js — versión con healthcheck /salud para Railway y protección de /inicio.
+ * server.js — Railway listo
+ * - Healthcheck: /salud (+ /health)
+ * - Sesiones en SQLite (connect-sqlite3)
+ * - Login tolerante (distintos nombres de campos y Basic Auth)
+ * - Busca automáticamente la página de login (con o sin tildes/espacios)
+ * - Protege /inicio y /historial
  */
 const path = require("path");
 const fs = require("fs");
@@ -15,10 +19,9 @@ const IS_PROD = NODE_ENV === "production";
 const PORT = process.env.PORT || 3000;
 const HOST = "0.0.0.0"; // importante para PaaS
 
-// Detrás de proxy (Railway) para que secure cookies funcionen con TLS del proxy
 app.set("trust proxy", 1);
 
-// Helpers
+// Paths
 const p = (...segs) => path.join(__dirname, ...segs);
 const PUBLIC_DIR = p("public");
 const SESSIONS_DIR = process.env.SESSIONS_DIR || p("db");
@@ -30,10 +33,7 @@ app.use(express.urlencoded({ extended: true }));
 // Sesión
 app.use(
   session({
-    store: new SQLiteStore({
-      dir: SESSIONS_DIR,
-      db: "sessions.sqlite",
-    }),
+    store: new SQLiteStore({ dir: SESSIONS_DIR, db: "sessions.sqlite" }),
     name: "sid",
     secret: process.env.SESSION_SECRET || "dev-only-secret-change-me",
     resave: false,
@@ -47,37 +47,82 @@ app.use(
   })
 );
 
-// Healthcheck para Railway
+// Healthcheck
 app.get("/salud", (_req, res) => res.status(200).send("ok"));
+app.get("/health", (_req, res) => res.status(200).send("ok"));
 
-// Auth minimal
+// ---- Login helpers ----
+const LOGIN_CANDIDATES = [
+  "login.html",
+  "inicio de sesión.html", // con tilde
+  "inicio de sesion.html", // sin tilde
+  "inicio.html",
+  "index.html",
+];
+
+function sendFirstExisting(res, baseDir, candidates) {
+  for (const name of candidates) {
+    const fp = path.join(baseDir, name);
+    if (fs.existsSync(fp)) return res.sendFile(fp);
+  }
+  return res
+    .status(404)
+    .send("<h1>404</h1><p>No se encontró ninguna página de login (login.html / inicio de sesión.html / inicio.html / index.html).</p>");
+}
+
+// AUTH mínima (admin/admin como en tu versión)
 const validateUser = async (username, password) => {
   if (username === "admin" && password === "admin") return { id: 1, username: "admin" };
   return null;
 };
 
+// Acepta múltiples nombres de campos y Basic Auth
+function extractCreds(req) {
+  let { username, password, user, pass, usuario, contraseña, contrasena, email, mail, pwd } = req.body || {};
+  // Basic Auth
+  if ((!username || !password) && req.headers.authorization?.startsWith("Basic ")) {
+    try {
+      const base64 = req.headers.authorization.split(" ")[1];
+      const [u, p] = Buffer.from(base64, "base64").toString("utf8").split(":");
+      username = username ?? u;
+      password = password ?? p;
+    } catch {}
+  }
+  username = username ?? user ?? usuario ?? email ?? mail;
+  password = password ?? pass ?? contraseña ?? contrasena ?? pwd;
+  // También permitimos query (solo para depuración)
+  if ((!username || !password) && req.method === "GET") {
+    const q = req.query || {};
+    username = username ?? q.username ?? q.user ?? q.usuario ?? q.email ?? q.mail;
+    password = password ?? q.password ?? q.pass ?? q.contraseña ?? q.contrasena ?? q.pwd;
+  }
+  return { username, password };
+}
+
 function requireAuth(req, res, next) {
   if (req.session && req.session.user) return next();
-  return res.redirect("/login.html");
+  // en vez de redirigir a un nombre fijo, servimos el login existente
+  return sendFirstExisting(res, PUBLIC_DIR, LOGIN_CANDIDATES);
 }
 
 // Bloqueo acceso directo a HTML protegidos
 const PROTECTED_HTML = new Set(["/inicio.html", "/historial.html"]);
 app.use((req, res, next) => {
-  if (PROTECTED_HTML.has(req.path)) {
-    if (!req.session || !req.session.user) {
-      return res.redirect("/login.html");
-    }
+  if (PROTECTED_HTML.has(req.path) && (!req.session || !req.session.user)) {
+    return sendFirstExisting(res, PUBLIC_DIR, LOGIN_CANDIDATES);
   }
   next();
 });
 
 // Rutas auth
-app.post("/api/login", async (req, res) => {
+app.all("/api/login", async (req, res) => {
   try {
-    const { username, password } = req.body || {};
+    const { username, password } = extractCreds(req);
     if (!username || !password) {
-      return res.status(400).json({ ok: false, error: "Faltan credenciales" });
+      return res.status(400).json({
+        ok: false,
+        error: "Faltan credenciales. Envia username/password (o user/pass, usuario/contraseña, email/password).",
+      });
     }
     const user = await validateUser(username, password);
     if (!user) return res.status(401).json({ ok: false, error: "Credenciales inválidas" });
@@ -103,28 +148,27 @@ app.get("/api/me", (req, res) => {
 });
 
 // Páginas
-app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "login.html")));
-app.get("/login", (req, res) => res.redirect("/login.html"));
-app.get("/inicio", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC_DIR, "inicio.html")));
-app.get("/historial", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC_DIR, "historial.html")));
+app.get("/", (_req, res) => sendFirstExisting(res, PUBLIC_DIR, LOGIN_CANDIDATES));
+app.get("/login", (_req, res) => sendFirstExisting(res, PUBLIC_DIR, LOGIN_CANDIDATES));
+app.get("/inicio", requireAuth, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "inicio.html")));
+app.get("/historial", requireAuth, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "historial.html")));
 
 // Estáticos
-app.use(express.static(PUBLIC_DIR, {
-  extensions: ["html"],
-  setHeaders(res, filePath) {
-    if (filePath.endsWith(".html")) {
-      res.setHeader("Cache-Control", "no-store");
-    }
-  },
-}));
+app.use(
+  express.static(PUBLIC_DIR, {
+    extensions: ["html"],
+    setHeaders(res, filePath) {
+      if (filePath.endsWith(".html")) res.setHeader("Cache-Control", "no-store");
+    },
+  })
+);
 
 // 404
-app.use((req, res) => {
+app.use((_req, res) => {
   res.status(404).send("<h1>404</h1><p>Recurso no encontrado.</p>");
 });
 
 app.listen(PORT, HOST, () => {
   console.log(`Servidor en http://${HOST}:${PORT} (env:${NODE_ENV})`);
 });
-
 
