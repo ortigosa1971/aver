@@ -1,6 +1,6 @@
-
 /**
- * server.js — versión con healthcheck /salud para Railway y protección de /inicio.
+ * server.js — versión con healthcheck /salud para Railway
+ * y protección de /inicio, usando "inicio de sesión.html".
  */
 const path = require("path");
 const fs = require("fs");
@@ -47,10 +47,11 @@ app.use(
   })
 );
 
-// Healthcheck para Railway
+// Healthcheck para Railway (+ alias /health)
 app.get("/salud", (_req, res) => res.status(200).send("ok"));
+app.get("/health", (_req, res) => res.status(200).send("ok"));
 
-// Auth minimal
+// -------- Auth mínima (demo) --------
 const validateUser = async (username, password) => {
   if (username === "admin" && password === "admin") return { id: 1, username: "admin" };
   return null;
@@ -58,7 +59,8 @@ const validateUser = async (username, password) => {
 
 function requireAuth(req, res, next) {
   if (req.session && req.session.user) return next();
-  return res.redirect("/login.html");
+  // importante: espacio codificado como %20
+  return res.redirect("/inicio%20de%20sesión.html");
 }
 
 // Bloqueo acceso directo a HTML protegidos
@@ -66,7 +68,7 @@ const PROTECTED_HTML = new Set(["/inicio.html", "/historial.html"]);
 app.use((req, res, next) => {
   if (PROTECTED_HTML.has(req.path)) {
     if (!req.session || !req.session.user) {
-      return res.redirect("/login.html");
+      return res.redirect("/inicio%20de%20sesión.html");
     }
   }
   next();
@@ -75,14 +77,17 @@ app.use((req, res, next) => {
 // Rutas auth
 app.post("/api/login", async (req, res) => {
   try {
-    const { username, password } = req.body || {};
-    if (!username || !password) {
+    const { username, password, user, pass } = req.body || {};
+    const u = username ?? user;
+    const pss = password ?? pass;
+
+    if (!u || !pss) {
       return res.status(400).json({ ok: false, error: "Faltan credenciales" });
     }
-    const user = await validateUser(username, password);
-    if (!user) return res.status(401).json({ ok: false, error: "Credenciales inválidas" });
+    const userObj = await validateUser(u, pss);
+    if (!userObj) return res.status(401).json({ ok: false, error: "Credenciales inválidas" });
 
-    req.session.user = { id: user.id, username: user.username };
+    req.session.user = { id: userObj.id, username: userObj.username };
     return res.json({ ok: true, user: req.session.user });
   } catch (err) {
     console.error("Login error:", err);
@@ -102,21 +107,23 @@ app.get("/api/me", (req, res) => {
   return res.json({ ok: true, user: req.session.user });
 });
 
-// Páginas
-app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "login.html")));
-app.get("/login", (req, res) => res.redirect("/login.html"));
+// Páginas (usar archivo con tilde y espacio)
+app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "inicio de sesión.html")));
+app.get("/login", (req, res) => res.redirect("/inicio%20de%20sesión.html"));
 app.get("/inicio", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC_DIR, "inicio.html")));
 app.get("/historial", requireAuth, (req, res) => res.sendFile(path.join(PUBLIC_DIR, "historial.html")));
 
 // Estáticos
-app.use(express.static(PUBLIC_DIR, {
-  extensions: ["html"],
-  setHeaders(res, filePath) {
-    if (filePath.endsWith(".html")) {
-      res.setHeader("Cache-Control", "no-store");
-    }
-  },
-}));
+app.use(
+  express.static(PUBLIC_DIR, {
+    extensions: ["html"],
+    setHeaders(res, filePath) {
+      if (filePath.endsWith(".html")) {
+        res.setHeader("Cache-Control", "no-store");
+      }
+    },
+  })
+);
 
 // 404
 app.use((req, res) => {
@@ -126,5 +133,3 @@ app.use((req, res) => {
 app.listen(PORT, HOST, () => {
   console.log(`Servidor en http://${HOST}:${PORT} (env:${NODE_ENV})`);
 });
-
-
