@@ -1,9 +1,6 @@
 /**
- * server.js — listo para Railway:
- * - Healthcheck: /salud (y alias /health)
- * - Sesiones en SQLite (persistentes)
- * - Usuarios en SQLite (persistentes)
- * - Protección de /inicio y /historial
+ * server.js — versión adaptada para "inicio de sesión.html"
+ * Listo para Railway con SQLite persistente y healthcheck.
  */
 
 const path = require("path");
@@ -22,14 +19,10 @@ const IS_PROD = NODE_ENV === "production";
 const PORT = process.env.PORT || 3000;
 const HOST = "0.0.0.0";
 
-// Detrás de proxy (Railway) para cookies secure
-app.set("trust proxy", 1);
+app.set("trust proxy", 1); // Necesario detrás de proxy (Railway)
 
-// Directorios
 const p = (...segs) => path.join(__dirname, ...segs);
 const PUBLIC_DIR = p("public");
-
-// Persistencia: usa volumen /data si existe
 const DATA_DIR = process.env.DATA_DIR || p("db");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -38,7 +31,7 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Sesiones persistentes en SQLite
+// Sesiones persistentes
 app.use(
   session({
     store: new SQLiteStore({ dir: DATA_DIR, db: "sessions.sqlite" }),
@@ -49,8 +42,8 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: "lax",
-      secure: IS_PROD, // true en prod detrás de TLS
-      maxAge: 1000 * 60 * 60 * 8, // 8h
+      secure: IS_PROD,
+      maxAge: 1000 * 60 * 60 * 8,
     },
   })
 );
@@ -59,7 +52,6 @@ app.use(
 const USERS_DB_FILE = path.join(DATA_DIR, "usuarios.db");
 const db = new Database(USERS_DB_FILE);
 
-// Esquema mínimo (compatible con tus scripts)
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
   username TEXT PRIMARY KEY,
@@ -71,17 +63,14 @@ CREATE TABLE IF NOT EXISTS users (
 const stmtGetUser = db.prepare("SELECT username, password FROM users WHERE username = ?");
 const stmtInsertUser = db.prepare("INSERT INTO users (username, password) VALUES (?, ?)");
 
-// Crea admin por defecto si no existe (una sola vez)
 try {
   stmtInsertUser.run("admin", "admin");
   console.log("Usuario admin creado por defecto");
-} catch (_) {
-  /* ya existía */
-}
+} catch (_) {}
 
 // -------------------- Healthcheck --------------------
 app.get("/salud", (_req, res) => res.status(200).send("ok"));
-app.get("/health", (_req, res) => res.status(200).send("ok")); // alias por si tu proyecto lo usa
+app.get("/health", (_req, res) => res.status(200).send("ok"));
 
 // -------------------- Auth --------------------
 async function validateUser(username, password) {
@@ -92,19 +81,18 @@ async function validateUser(username, password) {
 
 function requireAuth(req, res, next) {
   if (req.session && req.session.user) return next();
-  return res.redirect("/login.html");
+  return res.redirect("/inicio%20de%20sesión.html"); // redirige al login con espacio codificado
 }
 
-// Bloqueo de acceso directo a HTML protegidos
 const PROTECTED_HTML = new Set(["/inicio.html", "/historial.html"]);
 app.use((req, res, next) => {
   if (PROTECTED_HTML.has(req.path) && (!req.session || !req.session.user)) {
-    return res.redirect("/login.html");
+    return res.redirect("/inicio%20de%20sesión.html");
   }
   next();
 });
 
-// Rutas auth
+// API de login/logout/me
 app.post("/api/login", async (req, res) => {
   try {
     const { username, password } = req.body || {};
@@ -133,7 +121,7 @@ app.get("/api/me", (req, res) => {
   return res.json({ ok: true, user: req.session.user });
 });
 
-// (Opcional) Endpoint admin para crear usuarios desde fuera (proteger con token)
+// Endpoint admin para crear usuarios desde fuera (opcional)
 app.post("/api/admin/crear-usuario", (req, res) => {
   if (!process.env.ADMIN_TOKEN || req.headers["x-admin-token"] !== process.env.ADMIN_TOKEN) {
     return res.status(403).json({ ok: false, error: "Forbidden" });
@@ -151,11 +139,24 @@ app.post("/api/admin/crear-usuario", (req, res) => {
 });
 
 // -------------------- Páginas y estáticos --------------------
-app.get("/", (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "login.html")));
-app.get("/login", (_req, res) => res.redirect("/login.html"));
-app.get("/inicio", requireAuth, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "inicio.html")));
-app.get("/historial", requireAuth, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "historial.html")));
 
+// Página principal: muestra "inicio de sesión.html"
+app.get("/", (_req, res) =>
+  res.sendFile(path.join(PUBLIC_DIR, "inicio de sesión.html"))
+);
+
+// Alias /login → redirige a la página con espacio codificado
+app.get("/login", (_req, res) => res.redirect("/inicio%20de%20sesión.html"));
+
+// Páginas protegidas
+app.get("/inicio", requireAuth, (_req, res) =>
+  res.sendFile(path.join(PUBLIC_DIR, "inicio.html"))
+);
+app.get("/historial", requireAuth, (_req, res) =>
+  res.sendFile(path.join(PUBLIC_DIR, "historial.html"))
+);
+
+// Estáticos
 app.use(
   express.static(PUBLIC_DIR, {
     extensions: ["html"],
@@ -166,7 +167,9 @@ app.use(
 );
 
 // 404
-app.use((_, res) => res.status(404).send("<h1>404</h1><p>Recurso no encontrado.</p>"));
+app.use((_, res) =>
+  res.status(404).send("<h1>404</h1><p>Recurso no encontrado.</p>")
+);
 
 // -------------------- Arranque --------------------
 app.listen(PORT, HOST, () => {
